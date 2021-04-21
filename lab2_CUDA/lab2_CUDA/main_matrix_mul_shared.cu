@@ -1,3 +1,5 @@
+
+
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
@@ -6,6 +8,7 @@
 #include <time.h> 
 #include <random>
 #include <iostream>
+
 
 static const size_t CUDA_BLOCK_SIZE = 32;
 static const size_t MATRIX_SIZE = 1000; // square matrix
@@ -50,13 +53,52 @@ __global__ void mulGpuKernel(double* a, double* b, double* result, size_t matrix
     }
 }
 
+__global__ void mulSharedGpuKernel(double* a, double* b, double* result, size_t matrix_size)
+{
+    double result_value = 0;
+
+    size_t row_index = blockIdx.y * CUDA_BLOCK_SIZE + threadIdx.y;
+    size_t column_index = blockIdx.x * CUDA_BLOCK_SIZE + threadIdx.x;
+    size_t index_a_j;
+    size_t index_b_k;
+    __shared__ double matrix_a_shared[CUDA_BLOCK_SIZE][CUDA_BLOCK_SIZE];
+    __shared__ double matrix_b_shared[CUDA_BLOCK_SIZE][CUDA_BLOCK_SIZE];
+
+    for (int current_idx = 0; current_idx < (CUDA_BLOCK_SIZE + matrix_size - 1) / CUDA_BLOCK_SIZE; current_idx++) {
+
+        index_a_j  = current_idx * CUDA_BLOCK_SIZE + threadIdx.x;
+        index_b_k = current_idx * CUDA_BLOCK_SIZE + threadIdx.y;
+
+        if (index_a_j < matrix_size && row_index < matrix_size)
+            matrix_a_shared[threadIdx.y][threadIdx.x] = a[row_index * matrix_size + index_a_j];
+        else
+            matrix_a_shared[threadIdx.y][threadIdx.x] = 0;
+
+        if (index_b_k < matrix_size && column_index < matrix_size)
+            matrix_b_shared[threadIdx.y][threadIdx.x] = b[index_b_k * matrix_size + column_index];
+        else
+            matrix_b_shared[threadIdx.y][threadIdx.x] = 0;
+
+        __syncthreads();
+
+        for (int n = 0; n < CUDA_BLOCK_SIZE; n++)
+            result_value += matrix_a_shared[threadIdx.y][n] * matrix_b_shared[n][threadIdx.x];
+
+        __syncthreads();
+    }
+
+    if (row_index < matrix_size && column_index < matrix_size)
+        result[((blockIdx.y * blockDim.y + threadIdx.y) * matrix_size) +
+        (blockIdx.x * blockDim.x) + threadIdx.x] = result_value;
+}
+
 double processMulGpu(double* matrix_A, double* matrix_B, double* result, size_t matrix_size) {
     float elapsed_time;
     double* mat_A;
     double* mat_B;
     double* mat_res;
     size_t bytes_count = matrix_size * matrix_size * sizeof(double);
-    
+
     cudaEvent_t start, end;
     dim3 cuda_threads(CUDA_BLOCK_SIZE, CUDA_BLOCK_SIZE);
     int cuda_blocks_count_x = (matrix_size + cuda_threads.x - 1) / cuda_threads.x;
@@ -74,7 +116,9 @@ double processMulGpu(double* matrix_A, double* matrix_B, double* result, size_t 
     cudaMemcpy(mat_A, matrix_A, bytes_count, cudaMemcpyHostToDevice);
     cudaMemcpy(mat_B, matrix_B, bytes_count, cudaMemcpyHostToDevice);
 
-    mulGpuKernel << <cuda_blocks, cuda_threads >> > (mat_A, mat_B, mat_res, matrix_size);
+    //mulGpuKernel << <cuda_blocks, cuda_threads >> > (mat_A, mat_B, mat_res, matrix_size);
+
+    mulSharedGpuKernel << <cuda_blocks, cuda_threads >> > (mat_A, mat_B, mat_res, matrix_size);
 
     cudaMemcpy(result, mat_res, bytes_count, cudaMemcpyDeviceToHost);
 
@@ -84,12 +128,12 @@ double processMulGpu(double* matrix_A, double* matrix_B, double* result, size_t 
 
     cudaEventRecord(end, 0);
     cudaEventSynchronize(end);
-    cudaEventElapsedTime(&elapsed_time, start, end);
+    cudaEventElapsedTime(&elapsed_time, start, end); // ms
 
     cudaEventDestroy(start);
     cudaEventDestroy(end);
 
-    return elapsed_time / 1000.0f;
+    return elapsed_time / 1000.0f; // seconds
 }
 
 double findResultsMaxDiff(double* matrix_A, double* matrix_B, size_t matrix_dim) {
@@ -107,8 +151,7 @@ void clearResources(double* matrix_A, double* matrix_B, double* matrix_res_cpu, 
     delete[] matrix_res_gpu;
 }
 
-
-double* generate_random_matrix(size_t matrix_dim) {
+double* generateRandomMatrix(size_t matrix_dim) {
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<double> distrib(MATRIX_VALUE_MIN, MATRIX_VALUE_MAX);
@@ -123,8 +166,8 @@ int main(int argc, char* argv[]) {
     size_t matrix_size = MATRIX_SIZE;
     size_t matrix_dim = matrix_size * matrix_size;
 
-    double* matrix_A = generate_random_matrix(matrix_dim);
-    double* matrix_B = generate_random_matrix(matrix_dim);
+    double* matrix_A = generateRandomMatrix(matrix_dim);
+    double* matrix_B = generateRandomMatrix(matrix_dim);
     double* matrix_res_cpu = new double[matrix_dim];
     double* matrix_res_gpu = new double[matrix_dim];
 
