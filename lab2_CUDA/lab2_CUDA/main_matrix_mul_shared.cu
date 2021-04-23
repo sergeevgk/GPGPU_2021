@@ -92,7 +92,7 @@ __global__ void mulSharedGpuKernel(double* a, double* b, double* result, size_t 
         (blockIdx.x * blockDim.x) + threadIdx.x] = result_value;
 }
 
-double processMulGpu(double* matrix_A, double* matrix_B, double* result, size_t matrix_size) {
+double processMulGpu(double* matrix_A, double* matrix_B, double* result, size_t matrix_size, bool isShared) {
     float elapsed_time;
     double* mat_A;
     double* mat_B;
@@ -116,9 +116,12 @@ double processMulGpu(double* matrix_A, double* matrix_B, double* result, size_t 
     cudaMemcpy(mat_A, matrix_A, bytes_count, cudaMemcpyHostToDevice);
     cudaMemcpy(mat_B, matrix_B, bytes_count, cudaMemcpyHostToDevice);
 
-    //mulGpuKernel << <cuda_blocks, cuda_threads >> > (mat_A, mat_B, mat_res, matrix_size);
-
-    mulSharedGpuKernel << <cuda_blocks, cuda_threads >> > (mat_A, mat_B, mat_res, matrix_size);
+    if (isShared) {
+        mulSharedGpuKernel << <cuda_blocks, cuda_threads >> > (mat_A, mat_B, mat_res, matrix_size);
+    }
+    else {
+        mulGpuKernel << <cuda_blocks, cuda_threads >> > (mat_A, mat_B, mat_res, matrix_size);
+    }
 
     cudaMemcpy(result, mat_res, bytes_count, cudaMemcpyDeviceToHost);
 
@@ -170,16 +173,25 @@ int main(int argc, char* argv[]) {
     double* matrix_B = generateRandomMatrix(matrix_dim);
     double* matrix_res_cpu = new double[matrix_dim];
     double* matrix_res_gpu = new double[matrix_dim];
-
+    bool isShared = false;
+    
     float cpu_time = processMulCpu(matrix_A, matrix_B, matrix_res_cpu, matrix_size);
-    float gpu_time = processMulGpu(matrix_A, matrix_B, matrix_res_gpu, matrix_size);
 
+    float gpu_time = processMulGpu(matrix_A, matrix_B, matrix_res_gpu, matrix_size, isShared);
     double max_diff = findResultsMaxDiff(matrix_res_cpu, matrix_res_gpu, matrix_dim);
+    
+    isShared = true;
+    float gpu_time_shared = processMulGpu(matrix_A, matrix_B, matrix_res_gpu, matrix_size, isShared);
+
+    double max_diff_shared = findResultsMaxDiff(matrix_res_cpu, matrix_res_gpu, matrix_dim);
+
+    double result_max_diff = std::max(max_diff, max_diff_shared);
 
     printf("Matrix size: %d\n", matrix_size);
-    printf("CPU execution time: %lf\n", cpu_time);
-    printf("GPU execution time: %lf\n", gpu_time);
-    printf("Max error: %lf\n", max_diff);
+    printf("CPU execution time: %lf s\n", cpu_time);
+    printf("GPU execution time (normal): %lf s\n", gpu_time);
+    printf("GPU execution time (shared memory): %lf s\n", gpu_time_shared);
+    printf("Max error: %lf\n", result_max_diff);
     printf("\n");
 
     clearResources(matrix_A, matrix_B, matrix_res_cpu, matrix_res_gpu);
